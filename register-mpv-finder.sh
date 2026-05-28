@@ -13,16 +13,26 @@ fi
 
 CONTENTS="$APP_PATH/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
+RES_DIR="$CONTENTS/Resources"
 PLIST="$CONTENTS/Info.plist"
 
 rm -rf "$APP_PATH"
-mkdir -p "$MACOS_DIR" "$CONTENTS/Resources"
+mkdir -p "$MACOS_DIR" "$RES_DIR"
 
 # Launcher: Finder execs this, it forwards file args straight to Homebrew mpv.
-# pseudo-gui gives proper window/OSC behavior and no quit-on-eof.
+# Config lives entirely in ~/.config/mpv (shared with CLI mpv). On first launch,
+# if the user has no mpv.conf yet, seed a default one with pseudo-gui (proper
+# window/OSC, no quit-on-eof). Existing configs are never touched.
 cat > "$MACOS_DIR/mpv-launcher" <<EOF
 #!/bin/zsh
-exec "$MPV_BIN" --player-operation-mode=pseudo-gui "\$@"
+CONF_DIR="\$HOME/.config/mpv"
+if [[ ! -f "\$CONF_DIR/mpv.conf" ]]; then
+  mkdir -p "\$CONF_DIR"
+  cat > "\$CONF_DIR/mpv.conf" <<'CONF'
+player-operation-mode=pseudo-gui
+CONF
+fi
+exec "$MPV_BIN" "\$@"
 EOF
 chmod +x "$MACOS_DIR/mpv-launcher"
 
@@ -55,11 +65,15 @@ cat > "$PLIST" <<'EOF'
   <string>10.13</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
       <key>CFBundleTypeName</key>
       <string>Audio File</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
       <key>LSHandlerRank</key>
@@ -88,6 +102,8 @@ cat > "$PLIST" <<'EOF'
     <dict>
       <key>CFBundleTypeName</key>
       <string>Movie File</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
       <key>LSHandlerRank</key>
@@ -131,6 +147,8 @@ cat > "$PLIST" <<'EOF'
     <dict>
       <key>CFBundleTypeName</key>
       <string>Subtitles File</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
       <key>LSHandlerRank</key>
@@ -528,6 +546,25 @@ cat > "$PLIST" <<'EOF'
 </dict>
 </plist>
 EOF
+
+# Build icon.icns from Homebrew mpv's shipped PNGs. If they're missing, skip
+# gracefully (the CFBundleIconFile refs then just fall back to the generic icon).
+ICON_SRC="$(brew --prefix mpv 2>/dev/null)/share/mpv/icons/hicolor"
+if [[ -f "$ICON_SRC/128x128/apps/mpv.png" ]]; then
+  ICONSET="$(mktemp -d)/icon.iconset"
+  mkdir -p "$ICONSET"
+  /usr/bin/sips -z 16 16   "$ICON_SRC/16x16/apps/mpv.png"   --out "$ICONSET/icon_16x16.png"      >/dev/null
+  /usr/bin/sips -z 32 32   "$ICON_SRC/32x32/apps/mpv.png"   --out "$ICONSET/icon_16x16@2x.png"   >/dev/null
+  /usr/bin/sips -z 32 32   "$ICON_SRC/32x32/apps/mpv.png"   --out "$ICONSET/icon_32x32.png"      >/dev/null
+  /usr/bin/sips -z 64 64   "$ICON_SRC/64x64/apps/mpv.png"   --out "$ICONSET/icon_32x32@2x.png"   >/dev/null
+  /usr/bin/sips -z 128 128 "$ICON_SRC/128x128/apps/mpv.png" --out "$ICONSET/icon_128x128.png"    >/dev/null
+  /usr/bin/sips -z 256 256 "$ICON_SRC/128x128/apps/mpv.png" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+  /usr/bin/iconutil -c icns "$ICONSET" -o "$RES_DIR/icon.icns"
+  cp "$RES_DIR/icon.icns" "$RES_DIR/document.icns"
+  rm -rf "$(dirname "$ICONSET")"
+else
+  echo "warning: mpv icon PNGs not found; app will use the generic icon" >&2
+fi
 
 /usr/bin/plutil -lint "$PLIST"
 /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
