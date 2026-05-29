@@ -4,11 +4,44 @@ set -euo pipefail
 APP_PATH="/Applications/mpv.app"
 MPV_BIN="/opt/homebrew/bin/mpv"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+CONF_DIR="$HOME/.config/mpv"
+CONF_FILE="$CONF_DIR/mpv.conf"
+
+# Tagged, colored logging. Color only on a TTY so piped/redirected logs stay clean.
+if [[ -t 1 ]]; then
+  C_INFO=$'\e[1;94m'; C_ACTION=$'\e[1;95m'; C_OK=$'\e[1;92m'; C_WARN=$'\e[1;93m'; C_ERR=$'\e[1;91m'; C_RST=$'\e[0m'
+else
+  C_INFO=; C_ACTION=; C_OK=; C_WARN=; C_ERR=; C_RST=
+fi
+log_info()   { printf '%s[INFO]%s %s\n'   "$C_INFO"   "$C_RST" "$*"; }
+log_action() { printf '%s[ACTION]%s %s\n' "$C_ACTION" "$C_RST" "$*"; }
+log_ok()     { printf '%s[OK]%s %s\n'     "$C_OK"     "$C_RST" "$*"; }
+log_warn()   { printf '%s[WARN]%s %s\n'   "$C_WARN"   "$C_RST" "$*" >&2; }
+log_err()    { printf '%s[ERROR]%s %s\n'  "$C_ERR"    "$C_RST" "$*" >&2; }
 
 if [[ ! -x "$MPV_BIN" ]]; then
-  echo "mpv binary not found at $MPV_BIN" >&2
-  echo "Install it with: brew install mpv" >&2
+  log_err "mpv binary not found at $MPV_BIN"
+  log_err "Install it with: brew install mpv"
   exit 1
+fi
+
+# Handle an existing user config before building anything. The Finder launcher
+# can't prompt (no TTY), so the overwrite decision lives here. Existing config is
+# backed up, never silently destroyed.
+if [[ -f "$CONF_FILE" ]]; then
+  log_warn "Existing mpv config found at $CONF_FILE"
+  printf '%s[ACTION]%s Overwrite with default (player-operation-mode=pseudo-gui)? [y/N] ' "$C_ACTION" "$C_RST"
+  read -r reply
+  if [[ "$reply" == [yY]* ]]; then
+    backup="$CONF_FILE.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$CONF_FILE" "$backup"
+    print 'player-operation-mode=pseudo-gui' > "$CONF_FILE"
+    log_ok "Config reset to default (backup: $backup)"
+  else
+    log_info "Kept existing config"
+  fi
+else
+  log_info "No existing config; launcher will seed a default on first run"
 fi
 
 CONTENTS="$APP_PATH/Contents"
@@ -16,6 +49,7 @@ MACOS_DIR="$CONTENTS/MacOS"
 RES_DIR="$CONTENTS/Resources"
 PLIST="$CONTENTS/Info.plist"
 
+log_action "Building app bundle at $APP_PATH"
 rm -rf "$APP_PATH"
 mkdir -p "$MACOS_DIR" "$RES_DIR"
 
@@ -549,6 +583,7 @@ EOF
 
 # Build icon.icns from Homebrew mpv's shipped PNGs. If they're missing, skip
 # gracefully (the CFBundleIconFile refs then just fall back to the generic icon).
+log_action "Generating icon.icns from Homebrew mpv PNGs"
 ICON_SRC="$(brew --prefix mpv 2>/dev/null)/share/mpv/icons/hicolor"
 if [[ -f "$ICON_SRC/128x128/apps/mpv.png" ]]; then
   ICONSET="$(mktemp -d)/icon.iconset"
@@ -563,17 +598,23 @@ if [[ -f "$ICON_SRC/128x128/apps/mpv.png" ]]; then
   cp "$RES_DIR/icon.icns" "$RES_DIR/document.icns"
   rm -rf "$(dirname "$ICONSET")"
 else
-  echo "warning: mpv icon PNGs not found; app will use the generic icon" >&2
+  log_warn "mpv icon PNGs not found; app will use the generic icon"
 fi
 
-/usr/bin/plutil -lint "$PLIST"
+log_action "Validating, signing, and registering with Launch Services"
+if /usr/bin/plutil -lint "$PLIST" >/dev/null; then
+  log_ok "Info.plist is valid"
+else
+  log_err "Info.plist failed validation"
+  exit 1
+fi
 /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
 if ! /usr/bin/codesign --force --deep --sign - "$APP_PATH" 2>/dev/null; then
-  echo "warning: ad-hoc codesign failed; Finder registration may misbehave" >&2
+  log_warn "ad-hoc codesign failed; Finder registration may misbehave"
 fi
 /usr/bin/touch "$APP_PATH"
 "$LSREGISTER" -u "$APP_PATH" 2>/dev/null || true
 "$LSREGISTER" -f "$APP_PATH"
 /usr/bin/killall Finder 2>/dev/null || true
 
-echo "Registered $APP_PATH for Finder Open With media playback."
+log_ok "Registered $APP_PATH for Finder Open With media playback."
