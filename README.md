@@ -37,6 +37,11 @@ When Finder opens files with the app, the launcher receives the paths as `"$@"` 
   ```sh
   brew install mpv
   ```
+- Optional: ImageMagick for sharp SVG-rendered icons, including Retina sizes up to 1024×1024:
+  ```sh
+  brew install imagemagick
+  ```
+  Without ImageMagick, the script resizes mpv's available PNG icons using macOS's built-in tools. If SVG rendering fails, it also falls back to PNGs. Enlarged PNGs may look softer at larger sizes.
 
 ## Install
 
@@ -47,7 +52,7 @@ When Finder opens files with the app, the launcher receives the paths as `"$@"` 
 The script:
 
 1. Builds `/Applications/mpv.app` (launcher + `Info.plist` + icon).
-2. Generates an app icon from Homebrew mpv's shipped PNGs.
+2. Generates an app icon from Homebrew mpv's SVG using ImageMagick when available, with PNG fallback and icon sizes up to 1024×1024.
 3. Strips quarantine metadata and ad-hoc signs the bundle.
 4. Registers it with LaunchServices and restarts Finder.
 

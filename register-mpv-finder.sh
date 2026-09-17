@@ -2,7 +2,6 @@
 set -euo pipefail
 
 APP_PATH="/Applications/mpv.app"
-MPV_BIN="/opt/homebrew/bin/mpv"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 CONF_DIR="$HOME/.config/mpv"
 CONF_FILE="$CONF_DIR/mpv.conf"
@@ -19,9 +18,56 @@ log_ok()     { printf '%s[OK]%s %s\n'     "$C_OK"     "$C_RST" "$*"; }
 log_warn()   { printf '%s[WARN]%s %s\n'   "$C_WARN"   "$C_RST" "$*" >&2; }
 log_err()    { printf '%s[ERROR]%s %s\n'  "$C_ERR"    "$C_RST" "$*" >&2; }
 
-if [[ ! -x "$MPV_BIN" ]]; then
-  log_err "mpv binary not found at $MPV_BIN"
-  log_err "Install it with: brew install mpv"
+# Locate Homebrew on PATH, then try its standard Apple Silicon and Intel paths.
+BREW_BIN="$(command -v brew || true)"
+BREW_PREFIX=""
+if [[ -n "$BREW_BIN" ]]; then
+  BREW_PREFIX="$("$BREW_BIN" --prefix 2>/dev/null || true)"
+fi
+if [[ -z "$BREW_PREFIX" ]]; then
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    BREW_BIN=/opt/homebrew/bin/brew
+    BREW_PREFIX=/opt/homebrew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    BREW_BIN=/usr/local/bin/brew
+    BREW_PREFIX=/usr/local
+  else
+    log_err "Homebrew not found. Install from https://brew.sh"
+    exit 1
+  fi
+fi
+MPV_BIN="$BREW_PREFIX/bin/mpv"
+MAGICK_BIN="$BREW_PREFIX/bin/magick"
+
+log_action "Checking dependencies"
+deps_ok=true
+if [[ -x "$MPV_BIN" ]]; then
+  log_ok "mpv found at $MPV_BIN"
+else
+  log_err "mpv not found at $MPV_BIN"
+  log_err "  Fix:  brew install mpv"
+  deps_ok=false
+fi
+
+# Recommended: ImageMagick (for SVG → high-quality PNG icons)
+if [[ -x "$MAGICK_BIN" ]]; then
+  log_ok "ImageMagick (magick) found at $MAGICK_BIN"
+else
+  log_warn "ImageMagick not found – icon generation will fall back to PNGs (or generic icon)"
+  log_warn "  Recommended:  brew install imagemagick"
+fi
+
+for tool in /usr/bin/sips /usr/bin/iconutil /usr/bin/plutil /usr/bin/codesign; do
+  if [[ -x "$tool" ]]; then
+    log_ok "$(basename "$tool") available"
+  else
+    log_err "Required system tool missing: $tool"
+    deps_ok=false
+  fi
+done
+
+if [[ "$deps_ok" != true ]]; then
+  log_err "One or more required dependencies are missing. Aborting."
   exit 1
 fi
 
@@ -591,25 +637,65 @@ cat > "$PLIST" <<'EOF'
 </plist>
 EOF
 
-# Build icon.icns from Homebrew mpv's shipped PNGs. If they're missing, skip
-# gracefully (the CFBundleIconFile refs then just fall back to the generic icon).
-log_action "Generating icon.icns from Homebrew mpv PNGs"
-ICON_SRC="$(brew --prefix mpv 2>/dev/null)/share/icons/hicolor"
-if [[ -f "$ICON_SRC/128x128/apps/mpv.png" ]]; then
-  ICONSET="$(mktemp -d)/icon.iconset"
-  mkdir -p "$ICONSET"
-  /usr/bin/sips -z 16 16   "$ICON_SRC/16x16/apps/mpv.png"   --out "$ICONSET/icon_16x16.png"      >/dev/null
-  /usr/bin/sips -z 32 32   "$ICON_SRC/32x32/apps/mpv.png"   --out "$ICONSET/icon_16x16@2x.png"   >/dev/null
-  /usr/bin/sips -z 32 32   "$ICON_SRC/32x32/apps/mpv.png"   --out "$ICONSET/icon_32x32.png"      >/dev/null
-  /usr/bin/sips -z 64 64   "$ICON_SRC/64x64/apps/mpv.png"   --out "$ICONSET/icon_32x32@2x.png"   >/dev/null
-  /usr/bin/sips -z 128 128 "$ICON_SRC/128x128/apps/mpv.png" --out "$ICONSET/icon_128x128.png"    >/dev/null
-  /usr/bin/sips -z 256 256 "$ICON_SRC/128x128/apps/mpv.png" --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+# Prefer SVG rendering with ImageMagick; fall back to the available PNGs.
+log_action "Generating icon.icns"
+
+ICON_BASE="$("$BREW_BIN" --prefix mpv 2>/dev/null)/share/icons/hicolor"
+SVG="$ICON_BASE/scalable/apps/mpv.svg"
+ICONSET="$(mktemp -d)/icon.iconset"
+mkdir -p "$ICONSET"
+
+# Helper: produce one size. Returns 0 on success.
+make_size() {
+  local px=$1 name=$2
+  local out="$ICONSET/$name"
+
+  if [[ -x "$MAGICK_BIN" && -f "$SVG" ]]; then
+    # High-quality vector render
+    "$MAGICK_BIN" -background none -density 300 "$SVG" \
+      -resize "${px}x${px}" -gravity center -extent "${px}x${px}" \
+      "PNG32:$out" 2>/dev/null && return 0
+  fi
+
+  # Fallback: prefer the largest available PNG
+  for candidate in 128 64 32 16; do
+    local png="$ICON_BASE/${candidate}x${candidate}/apps/mpv.png"
+    if [[ -f "$png" ]]; then
+      /usr/bin/sips -z "$px" "$px" "$png" --out "$out" >/dev/null 2>&1 && return 0
+    fi
+  done
+  return 1
+}
+
+icon_ok=true
+for size_name in \
+  "16:icon_16x16.png" \
+  "32:icon_16x16@2x.png" \
+  "32:icon_32x32.png" \
+  "64:icon_32x32@2x.png" \
+  "128:icon_128x128.png" \
+  "256:icon_128x128@2x.png" \
+  "256:icon_256x256.png" \
+  "512:icon_256x256@2x.png" \
+  "512:icon_512x512.png" \
+  "1024:icon_512x512@2x.png"
+do
+  px=${size_name%%:*}
+  name=${size_name#*:}
+  if ! make_size "$px" "$name"; then
+    icon_ok=false
+    break
+  fi
+done
+
+if [[ "$icon_ok" == true ]]; then
   /usr/bin/iconutil -c icns "$ICONSET" -o "$RES_DIR/icon.icns"
   cp "$RES_DIR/icon.icns" "$RES_DIR/document.icns"
-  rm -rf "$(dirname "$ICONSET")"
+  log_ok "icon.icns created"
 else
-  log_warn "mpv icon PNGs not found; app will use the generic icon"
+  log_warn "Could not build a complete icon set – app will use the generic system icon"
 fi
+rm -rf "$(dirname "$ICONSET")"
 
 log_action "Validating, signing, and registering with Launch Services"
 if /usr/bin/plutil -lint "$PLIST" >/dev/null; then
