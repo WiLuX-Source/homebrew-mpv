@@ -594,7 +594,7 @@ EOF
 # Build icon.icns from Homebrew mpv's shipped PNGs. If they're missing, skip
 # gracefully (the CFBundleIconFile refs then just fall back to the generic icon).
 log_action "Generating icon.icns from Homebrew mpv PNGs"
-ICON_SRC="$(brew --prefix mpv 2>/dev/null)/share/mpv/icons/hicolor"
+ICON_SRC="$(brew --prefix mpv 2>/dev/null)/share/icons/hicolor"
 if [[ -f "$ICON_SRC/128x128/apps/mpv.png" ]]; then
   ICONSET="$(mktemp -d)/icon.iconset"
   mkdir -p "$ICONSET"
