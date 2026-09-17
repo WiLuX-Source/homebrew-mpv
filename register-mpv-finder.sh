@@ -101,6 +101,16 @@ cat > "$PLIST" <<'EOF'
   <true/>
   <key>CFBundleIconFile</key>
   <string>icon</string>
+
+  <!-- Prevent Rosetta prompt for a script-based launcher -->
+  <key>LSArchitecturePriority</key>
+  <array>
+    <string>arm64</string>
+    <string>x86_64</string>
+  </array>
+  <key>LSRequiresNativeExecution</key>
+  <true/>
+
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
